@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
-import { isOwner } from "@/lib/auth";
+import { requireUser } from "@/lib/auth";
 import EditEntry from "@/app/edit-entry";
 
 export const dynamic = "force-dynamic";
@@ -10,9 +10,9 @@ const money = (c: number | null) => (c == null ? "" : (c / 100).toFixed(2));
 
 export default async function EditEntryPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  if (!(await isOwner())) notFound();
-  const entry = await db.serviceEntry.findUnique({
-    where: { id },
+  const user = await requireUser(`/entry/${id}/edit`);
+  const entry = await db.serviceEntry.findFirst({
+    where: { id, vehicle: { ownerId: user.id } },
     include: { vehicle: true, documents: true },
   });
   if (!entry) notFound();

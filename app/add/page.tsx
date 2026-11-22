@@ -1,21 +1,13 @@
-import { isOwner } from "@/lib/auth";
-import Link from "next/link";
+import { requireUser } from "@/lib/auth";
 import AddForm from "./add-form";
 
 export const dynamic = "force-dynamic";
 
 export default async function AddPage() {
-  const owner = await isOwner();
+  await requireUser("/add");
   return (
     <main className="wrap">
-      {owner ? (
-        <AddForm />
-      ) : (
-        <>
-          <h1>Add a vehicle</h1>
-          <p className="lead">This screen is locked. <Link href="/unlock?next=/add">Unlock with your passcode</Link> to add vehicles.</p>
-        </>
-      )}
+      <AddForm />
     </main>
   );
 }

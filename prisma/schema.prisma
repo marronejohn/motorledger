@@ -22,6 +22,8 @@ datasource db {
 model Vehicle {
   id             String   @id @default(cuid())
   ownerId        String
+  // The signed-in account that owns this vehicle
+  owner          User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   // Inferred from the onboarding photo (car, bike, boat, caravan, other). Nullable until confirmed.
   type           String?
   typeConfirmed  Boolean  @default(false)
@@ -122,9 +124,24 @@ model Handover {
   createdAt DateTime @default(now())
 }
 
-// Tiny key/value store for app-level owner choices (passcode on/off).
-model AppSetting {
-  id    Int    @id @default(autoincrement())
-  key   String @unique
-  value String
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  createdAt    DateTime @default(now())
+
+  vehicles Vehicle[]
+  sessions Session[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
 }

@@ -1,22 +1,16 @@
 "use server";
 
 import { db } from "@/lib/db";
-import {
-  isOwner,
-  unlockOwner,
-  setPasscode,
-  verifyCurrent,
-  removePasscode,
-  passcodeConfigured,
-} from "@/lib/auth";
+import { requireUser, signUp, signIn, signOut } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
-// v1 runs single-owner: no accounts yet, every vehicle belongs to this owner id.
-const OWNER = "john";
+// Every vehicle belongs to the signed-in account: writes are owner-gated and
+// every read filters on ownerId, so accounts never see each other's data.
+// The share and buyer views stay login-free on their shareToken.
 
 export async function createVehicle(fd: FormData) {
-  if (!(await isOwner())) redirect("/unlock?next=/add");
+  const user = await requireUser("/add");
   const type = (fd.get("type") as string) || null;
   const nickname = (fd.get("nickname") as string) || null;
   const year = fd.get("year") ? parseInt(fd.get("year") as string, 10) : null;
@@ -31,7 +25,7 @@ export async function createVehicle(fd: FormData) {
 
   const vehicle = await db.vehicle.create({
     data: {
-      ownerId: OWNER,
+      ownerId: user.id,
       type,
       typeConfirmed: Boolean(type),
       nickname,
@@ -62,20 +56,21 @@ export async function createVehicle(fd: FormData) {
 // Editing a vehicle's reminder dates: rego expiry, insurer, insurance
 // expiry. Owner-gated like every write path.
 export async function updateVehicle(fd: FormData) {
-  if (!(await isOwner())) redirect("/unlock");
   const id = fd.get("vehicleId") as string;
+  const user = await requireUser(`/vehicle/${id}`);
   const dateFrom = (name: string) => {
     const raw = fd.get(name) as string;
     return raw ? new Date(`${raw}T00:00:00`) : null;
   };
-  await db.vehicle.update({
-    where: { id },
+  const res = await db.vehicle.updateMany({
+    where: { id, ownerId: user.id },
     data: {
       regoExpiry: dateFrom("regoExpiry"),
       insurer: (fd.get("insurer") as string) || null,
       insuranceExpiry: dateFrom("insuranceExpiry"),
     },
   });
+  if (res.count === 0) redirect("/");
   revalidatePath(`/vehicle/${id}`);
   redirect(`/vehicle/${id}`);
 }
@@ -84,15 +79,20 @@ export async function updateVehicle(fd: FormData) {
 // documents and handovers. Owner-gated like every write path.
 export async function deleteVehicle(fd: FormData) {
   const vehicleId = fd.get("vehicleId") as string;
-  if (!(await isOwner())) redirect(`/unlock?next=/`);
-  await db.vehicle.delete({ where: { id: vehicleId } });
+  const user = await requireUser("/");
+  await db.vehicle.deleteMany({ where: { id: vehicleId, ownerId: user.id } });
   revalidatePath("/");
   redirect("/");
 }
 
 export async function addServiceEntry(fd: FormData) {
   const vehicleId = fd.get("vehicleId") as string;
-  if (!(await isOwner())) redirect(`/unlock?next=/vehicle/${vehicleId}`);
+  const user = await requireUser(`/vehicle/${vehicleId}`);
+  const vehicle = await db.vehicle.findFirst({
+    where: { id: vehicleId, ownerId: user.id },
+    select: { id: true },
+  });
+  if (!vehicle) redirect("/");
   const dateStr = fd.get("date") as string;
   const odo = fd.get("odometerKm") ? parseInt(fd.get("odometerKm") as string, 10) : null;
   const jobs = ((fd.get("jobs") as string) || "").trim() || "Service entry";
@@ -175,14 +175,14 @@ function entryExtras(fd: FormData) {
 // and the human confirm never lapses (edits are owner-gated like every write).
 export async function updateServiceEntry(fd: FormData) {
   const entryId = fd.get("entryId") as string;
-  if (!(await isOwner())) redirect(`/unlock?next=/entry/${entryId}/edit`);
+  const user = await requireUser(`/entry/${entryId}/edit`);
   const dateStr = fd.get("date") as string;
   const odo = fd.get("odometerKm") ? parseInt(fd.get("odometerKm") as string, 10) : null;
   const jobs = ((fd.get("jobs") as string) || "").trim() || "Service entry";
   const cost = fd.get("cost") ? Math.round(parseFloat(fd.get("cost") as string) * 100) : null;
 
-  await db.serviceEntry.update({
-    where: { id: entryId },
+  const res = await db.serviceEntry.updateMany({
+    where: { id: entryId, vehicle: { ownerId: user.id } },
     data: {
       date: new Date(dateStr + "T00:00:00"),
       odometerKm: odo,
@@ -193,6 +193,7 @@ export async function updateServiceEntry(fd: FormData) {
       ...entryExtras(fd),
     },
   });
+  if (res.count === 0) redirect("/");
 
   const receiptUrls = fd.getAll("receiptPhotos").filter(Boolean) as string[];
   for (const url of receiptUrls.slice(0, 8)) {
@@ -209,9 +210,12 @@ export async function updateServiceEntry(fd: FormData) {
 // Removing an entry takes its attachments with it (documents cascade).
 export async function deleteServiceEntry(fd: FormData) {
   const entryId = fd.get("entryId") as string;
-  if (!(await isOwner())) redirect(`/unlock?next=/entry/${entryId}/edit`);
+  const user = await requireUser(`/entry/${entryId}/edit`);
+  const res = await db.serviceEntry.deleteMany({
+    where: { id: entryId, vehicle: { ownerId: user.id } },
+  });
+  if (res.count === 0) redirect("/");
   const vehicleId = (fd.get("vehicleId") as string) || "";
-  await db.serviceEntry.delete({ where: { id: entryId } });
   revalidatePath(`/vehicle/${vehicleId}`);
   redirect(`/vehicle/${vehicleId}`);
 }
@@ -220,48 +224,43 @@ export async function deleteServiceEntry(fd: FormData) {
 export async function deleteDocument(fd: FormData) {
   const docId = fd.get("documentId") as string;
   const vehicleId = (fd.get("vehicleId") as string) || "";
-  if (!(await isOwner())) redirect(`/unlock?next=/vehicle/${vehicleId}`);
-  await db.document.delete({ where: { id: docId } });
+  const user = await requireUser(`/vehicle/${vehicleId}`);
+  await db.document.deleteMany({
+    where: {
+      id: docId,
+      OR: [
+        { vehicle: { ownerId: user.id } },
+        { entry: { vehicle: { ownerId: user.id } } },
+      ],
+    },
+  });
   revalidatePath(`/vehicle/${vehicleId}`);
   redirect(fd.get("back") === "edit" && fd.get("entryId") ? `/entry/${fd.get("entryId")}/edit` : `/vehicle/${vehicleId}`);
 }
 
-export async function doUnlock(fd: FormData) {
-  const ok = await unlockOwner(((fd.get("passcode") as string) ?? "").trim());
+export async function signUpAction(fd: FormData) {
   const next = (fd.get("next") as string) || "/";
-  if (!ok) redirect(`/unlock?bad=1&next=${encodeURIComponent(next)}`);
+  const err = await signUp(
+    (fd.get("email") as string) ?? "",
+    (fd.get("password") as string) ?? "",
+    (fd.get("name") as string) ?? ""
+  );
+  if (err) {
+    redirect(`/signin?mode=signup&err=${encodeURIComponent(err)}&next=${encodeURIComponent(next)}`);
+  }
   redirect(next);
 }
 
-// Passcode is the app user's own choice: they turn it on, change it, or
-// remove it here. Turning it on or changing it needs the current passcode
-// whenever one is already set.
-export async function changePasscode(fd: FormData) {
-  const current = ((fd.get("current") as string) ?? "").trim();
-  const next = ((fd.get("next") as string) ?? "").trim();
-  if (!next) redirect("/settings");
-  if (await passcodeConfigured()) {
-    if (!(await verifyCurrent(current))) redirect("/settings?bad=1");
-  } else {
-    // First passcode claim on a public deployment: if the operator set a
-    // SETUP_TOKEN env var, it is required here, so a stranger who finds the
-    // URL cannot claim the app and lock the owner out before they set theirs.
-    const setupToken = process.env.SETUP_TOKEN;
-    if (setupToken && ((fd.get("setupToken") as string) ?? "").trim() !== setupToken) {
-      redirect("/settings?bad=1");
-    }
+export async function signInAction(fd: FormData) {
+  const next = (fd.get("next") as string) || "/";
+  const err = await signIn((fd.get("email") as string) ?? "", (fd.get("password") as string) ?? "");
+  if (err) {
+    redirect(`/signin?err=${encodeURIComponent(err)}&next=${encodeURIComponent(next)}`);
   }
-  await setPasscode(next);
-  revalidatePath("/settings");
-  redirect("/settings?saved=1");
+  redirect(next);
 }
 
-export async function removePasscodeAction(fd: FormData) {
-  const current = ((fd.get("current") as string) ?? "").trim();
-  if (await passcodeConfigured()) {
-    if (!(await verifyCurrent(current))) redirect("/settings?bad=1");
-  }
-  await removePasscode();
-  revalidatePath("/settings");
-  redirect("/settings?removed=1");
+export async function signOutAction() {
+  await signOut();
+  redirect("/signin");
 }

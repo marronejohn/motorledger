@@ -1,25 +1,16 @@
 import Link from "next/link";
 import DeleteVehicleButton from "./delete-button";
 import { db } from "@/lib/db";
-import { isOwner, passcodeConfigured } from "@/lib/auth";
+import { requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  // When the owner has a passcode on, the list of vehicles is theirs alone:
-  // the public surfaces are the buyer share links, not this page.
-  if ((await passcodeConfigured()) && !(await isOwner())) {
-    return (
-      <main className="wrap">
-        <header className="head">
-          <h1>MotorLedger</h1>
-          <p>Your vehicle's whole service history, built from photos.</p>
-          <p className="meta"><Link href="/unlock?next=/">Unlock</Link></p>
-        </header>
-      </main>
-    );
-  }
+  // Every signed-in account sees only its own vehicles; the public surfaces
+  // are the buyer share links, not this page.
+  const user = await requireUser("/");
   const vehicles = await db.vehicle.findMany({
+    where: { ownerId: user.id },
     orderBy: { createdAt: "desc" },
     include: { entries: { orderBy: { date: "desc" }, take: 1 } },
   });
@@ -30,6 +21,8 @@ export default async function Home() {
         <h1>MotorLedger</h1>
         <p>Your vehicle's whole service history, built from photos.</p>
         <p className="meta">
+          {user.name ?? user.email}
+          {" · "}
           <Link href="/settings">Settings</Link>
           {" · "}
           <Link href="/add">Add vehicle</Link>

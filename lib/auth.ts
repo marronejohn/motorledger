@@ -1,99 +1,109 @@
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { db } from "@/lib/db";
 
-// The passcode is the app user's own choice, stored in the database:
-// off by default (the app is open), and the user turns it on, changes it,
-// or removes it from /settings. When it is on, the write screens (/add,
-// adding entries) ask for it; the share/buyer views always stay public.
-// The cookie carries a token derived from the stored hash, never the
-// passcode itself, and changing or removing the passcode invalidates it.
-const COOKIE = "ml_owner";
-const KEY = "ownerPasscode";
-
-type Stored = { salt: string; hash: string };
-
-// The AppSetting table is created on first use so the app works on a fresh
-// database without a migration step. CREATE TABLE IF NOT EXISTS is idempotent.
-let tableReady: Promise<unknown> | null = null;
-function ensureTable(): Promise<unknown> {
-  tableReady ??= db.$executeRawUnsafe(
-    'CREATE TABLE IF NOT EXISTS "AppSetting" ("id" SERIAL PRIMARY KEY, "key" TEXT NOT NULL UNIQUE, "value" TEXT NOT NULL)'
-  );
-  return tableReady;
-}
-
-async function readStored(): Promise<Stored | null> {
-  await ensureTable();
-  const row = await db.appSetting.findUnique({ where: { key: KEY } });
-  if (!row) return null;
-  try {
-    const parsed = JSON.parse(row.value) as Stored;
-    return parsed?.salt && parsed?.hash ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function tokenFor(stored: Stored): string {
-  return createHash("sha256").update(`${stored.salt}:${stored.hash}`).digest("hex").slice(0, 32);
-}
+// Per-person accounts: email + password sign-up, a signed-in session cookie,
+// and every read or write scoped to the signed-in account's own vehicles.
+// Passwords are scrypt-hashed with a per-user salt; session tokens are random
+// and stored only as SHA-256 hashes, so a database leak reveals neither.
+const COOKIE = "ml_session";
+const SESSION_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 
 const cookieOptions = {
   httpOnly: true,
   sameSite: "lax" as const,
   secure: true,
   path: "/",
-  maxAge: 60 * 60 * 24 * 90, // 90 days
+  maxAge: 60 * 60 * 24 * 90,
 };
 
-export async function passcodeConfigured(): Promise<boolean> {
-  return (await readStored()) !== null;
-}
+export type SessionUser = { id: string; email: string; name: string | null };
 
-export async function isOwner(): Promise<boolean> {
-  const stored = await readStored();
-  if (!stored) return true; // the user chose not to use a passcode
-  const jar = await cookies();
-  return jar.get(COOKIE)?.value === tokenFor(stored);
-}
-
-function hashPasscode(passcode: string, salt?: string): Stored {
+function hashPassword(password: string, salt?: string): string {
   const s = salt ?? randomBytes(16).toString("hex");
-  return { salt: s, hash: scryptSync(passcode, s, 32).toString("hex") };
+  return `${s}:${scryptSync(password, s, 64).toString("hex")}`;
 }
 
-export async function unlockOwner(passcode: string): Promise<boolean> {
-  const stored = await readStored();
-  if (!stored) return true;
-  const candidate = hashPasscode(passcode, stored.salt);
-  const ok = timingSafeEqual(Buffer.from(candidate.hash, "hex"), Buffer.from(stored.hash, "hex"));
-  if (!ok) return false;
-  const jar = await cookies();
-  jar.set(COOKIE, tokenFor(stored), cookieOptions);
-  return true;
+function verifyPassword(password: string, stored: string): boolean {
+  const [salt, hash] = stored.split(":");
+  if (!salt || !hash) return false;
+  const candidate = scryptSync(password, salt, 64).toString("hex");
+  return timingSafeEqual(Buffer.from(candidate, "hex"), Buffer.from(hash, "hex"));
 }
 
-export async function setPasscode(passcode: string): Promise<void> {
-  await ensureTable();
-  const stored = hashPasscode(passcode);
-  await db.appSetting.upsert({
-    where: { key: KEY },
-    update: { value: JSON.stringify(stored) },
-    create: { key: KEY, value: JSON.stringify(stored) },
+function tokenHash(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function validEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+async function startSession(userId: string): Promise<void> {
+  const token = randomBytes(32).toString("hex");
+  await db.session.create({
+    data: { tokenHash: tokenHash(token), userId, expiresAt: new Date(Date.now() + SESSION_MS) },
   });
   const jar = await cookies();
-  jar.set(COOKIE, tokenFor(stored), cookieOptions);
+  jar.set(COOKIE, token, cookieOptions);
 }
 
-export async function verifyCurrent(passcode: string): Promise<boolean> {
-  const stored = await readStored();
-  if (!stored) return true; // nothing to verify against
-  const candidate = hashPasscode(passcode, stored.salt);
-  return timingSafeEqual(Buffer.from(candidate.hash, "hex"), Buffer.from(stored.hash, "hex"));
+// Returns an error message, or null when the account was created and the
+// new session is signed in.
+export async function signUp(
+  email: string,
+  password: string,
+  name: string
+): Promise<string | null> {
+  const clean = email.trim().toLowerCase();
+  if (!validEmail(clean)) return "That email does not look right.";
+  if (password.length < 8) return "Passwords need at least 8 characters.";
+  try {
+    const user = await db.user.create({
+      data: { email: clean, passwordHash: hashPassword(password), name: name.trim() || null },
+    });
+    await startSession(user.id);
+    return null;
+  } catch (err: unknown) {
+    if (typeof err === "object" && err && (err as { code?: string }).code === "P2002") {
+      return "That email already has an account. Sign in instead.";
+    }
+    return "Could not create the account, try again.";
+  }
 }
 
-export async function removePasscode(): Promise<void> {
-  await ensureTable();
-  await db.appSetting.deleteMany({ where: { key: KEY } });
+export async function signIn(email: string, password: string): Promise<string | null> {
+  const clean = email.trim().toLowerCase();
+  const user = await db.user.findUnique({ where: { email: clean } });
+  if (!user || !verifyPassword(password, user.passwordHash)) {
+    return "That email and password do not match.";
+  }
+  await startSession(user.id);
+  return null;
+}
+
+export async function signOut(): Promise<void> {
+  const token = (await cookies()).get(COOKIE)?.value;
+  if (token) await db.session.deleteMany({ where: { tokenHash: tokenHash(token) } });
+  (await cookies()).delete(COOKIE);
+}
+
+export async function currentUser(): Promise<SessionUser | null> {
+  const token = (await cookies()).get(COOKIE)?.value;
+  if (!token) return null;
+  const session = await db.session.findUnique({
+    where: { tokenHash: tokenHash(token) },
+    include: { user: true },
+  });
+  if (!session || session.expiresAt < new Date()) return null;
+  return { id: session.user.id, email: session.user.email, name: session.user.name };
+}
+
+// For pages and actions: bounce strangers to the sign-in screen, remembering
+// where they were headed so sign-in returns them there.
+export async function requireUser(next = "/"): Promise<SessionUser> {
+  const user = await currentUser();
+  if (!user) redirect(`/signin?next=${encodeURIComponent(next)}`);
+  return user;
 }

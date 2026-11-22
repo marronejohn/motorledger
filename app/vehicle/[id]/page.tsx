@@ -1,7 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { db } from "@/lib/db";
-import { isOwner, passcodeConfigured } from "@/lib/auth";
+import { requireUser } from "@/lib/auth";
 import NewEntry from "@/app/new-entry";
 import { updateVehicle } from "@/app/actions";
 
@@ -9,12 +9,11 @@ export const dynamic = "force-dynamic";
 
 export default async function VehiclePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const owner = await isOwner();
-  // The timeline is the owner's to read: with a passcode on, a stranger gets
-  // the unlock screen, and only /share/<token> stays public.
-  if (!owner && (await passcodeConfigured())) redirect(`/unlock?next=/vehicle/${id}`);
-  const vehicle = await db.vehicle.findUnique({
-    where: { id },
+  // The timeline belongs to the signed-in account: strangers get the sign-in
+  // screen, and only /share/<token> stays public.
+  const user = await requireUser(`/vehicle/${id}`);
+  const vehicle = await db.vehicle.findFirst({
+    where: { id, ownerId: user.id },
     include: { entries: { orderBy: { date: "asc" }, include: { documents: true } } },
   });
   if (!vehicle) notFound();
@@ -201,11 +200,7 @@ export default async function VehiclePage({ params }: { params: Promise<{ id: st
         </div>
       </header>
 
-      {owner ? (
-        <NewEntry vehicleId={vehicle.id} lastOdo={odoEntries.at(-1)?.odometerKm ?? null} />
-      ) : (
-        <p className="meta">Locked: <Link href={`/unlock?next=/vehicle/${vehicle.id}`}>unlock with your passcode</Link> to add entries.</p>
-      )}
+      <NewEntry vehicleId={vehicle.id} lastOdo={odoEntries.at(-1)?.odometerKm ?? null} />
 
       <section className="timeline">
         <h2>Service history</h2>
