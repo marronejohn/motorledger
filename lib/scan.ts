@@ -304,7 +304,7 @@ export function isPdfFile(file: File): boolean {
 }
 
 export type InvoiceRead = {
-  serviceType: string | null; // e.g. "30,000KM/36 MONTH SERVICE"
+  serviceType: string | null; // e.g. "60,000KM LOGBOOK SERVICE"
   repairOrderNo: string | null;
   invoiceNo: string | null;
   provider: string | null; // workshop / dealership that did the work
@@ -353,7 +353,7 @@ export function readInvoice(text: string): InvoiceRead {
   m = t.match(/REPAIR\s+ORDER(?:\s+NO|\s+NUMBER|\.?\s*NO)?\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{4,})/);
   if (m) inv.repairOrderNo = m[1];
 
-  // "Tax Invoice No. WB497666" / "Invoice #: 1234567" / "INVOICE NO 497666".
+  // "Tax Invoice No. 987654" / "Invoice #: 1234567" / "INVOICE NO 987654".
   // Guarded so a "Repair Order No." label right before it never reads as the invoice number.
   m = t.match(/(?:TAX\s+)?INVOICE\s*(?:NO|NUMBER|NUM|#|ID)?\.?\s*[:#]?\s*([A-Z]{0,3}[0-9][A-Z0-9-]{3,})/);
   if (m && !/REPAIR\s+ORDER\s*[\s\S]{0,20}$/.test(t.slice(0, m.index).slice(-30))) inv.invoiceNo = m[1];
@@ -362,7 +362,7 @@ export function readInvoice(text: string): InvoiceRead {
   // the invoice's own SELLING DEALER field, the payment footer's account name,
   // then the letterhead at the top of the page. A suggestion the human confirms.
   // A real workshop name: at least two letter runs, no long digit run (that is
-  // a rego or odometer the OCR merged into the line, e.g. "ABC123 2822117").
+  // a rego or odometer the OCR merged into the line, e.g. "ABC123 185000").
   const nameOk = (v: string) =>
     (v.match(/[A-Z]{2,}/g) ?? []).length >= 2 && !/\d{3}/.test(v);
   m = t.match(/SELLING\s+DEALER\s*:?\s*(?:\n\s*)?([A-Z][A-Z0-9& .,'\/-]{2,45})/);

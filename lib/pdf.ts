@@ -84,7 +84,7 @@ export async function pdfTextContent(file: File, maxPages = 10): Promise<string>
     // Join runs the way the page lays them out: a run on a new baseline is a
     // new line, a run that starts after a horizontal gap is a new word.
     // Concatenating runs blindly fused adjacent table columns ("1" +
-    // "20/03/2026" became "120/03/2026"), which hid dates from every
+    // "14/06/2024" became "114/06/2024"), which hid dates from every
     // boundary-sensitive regex and glued JOB lines to the next sentence.
     let s = "";
     let px = 0, py = 0, pw = 0, has = false;

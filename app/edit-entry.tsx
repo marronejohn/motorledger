@@ -85,9 +85,9 @@ export default function EditEntry(props: EditEntryProps) {
         </div>
         <label>Notes <input name="notes" defaultValue={initial.notes} /></label>
         <div className="row">
-          <label>Service type <input name="serviceType" defaultValue={initial.serviceType} placeholder="30,000km/36 month service" /></label>
+          <label>Service type <input name="serviceType" defaultValue={initial.serviceType} placeholder="60,000km logbook service" /></label>
           <label>Job / repair order no. <input name="repairOrderNo" defaultValue={initial.repairOrderNo} /></label>
-          <label>Invoice no. <input name="invoiceNo" defaultValue={initial.invoiceNo} placeholder="wb497666" /></label>
+          <label>Invoice no. <input name="invoiceNo" defaultValue={initial.invoiceNo} placeholder="1234567" /></label>
         </div>
         <div className="row">
           <label>Adviser <input name="adviser" defaultValue={initial.adviser} /></label>

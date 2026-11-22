@@ -117,7 +117,7 @@ export default function NewEntry({ vehicleId, lastOdo }: { vehicleId: string; la
         <label>What was done <input name="jobs" value={jobs} onChange={(e) => { touched.jobs = true; setJobs(e.target.value); }} placeholder="Oil and filter, brakes" /></label>
         <div className="row">
           <label>Cost ($) <input name="cost" inputMode="decimal" value={cost} onChange={(e) => setCost(e.target.value)} placeholder="185.00" /></label>
-          <label>Who did it <input name="provider" value={provider} onChange={(e) => setProvider(e.target.value)} placeholder="Hobart Auto Care" /></label>
+          <label>Who did it <input name="provider" value={provider} onChange={(e) => setProvider(e.target.value)} placeholder="Auto Care" /></label>
         </div>
         <label>Notes <input name="notes" value={notes} onChange={(e) => setNotes(e.target.value)} /></label>
 
@@ -127,9 +127,9 @@ export default function NewEntry({ vehicleId, lastOdo }: { vehicleId: string; la
         {more && (
           <>
             <div className="row">
-              <label>Service type <input name="serviceType" value={serviceType} onChange={(e) => setServiceType(e.target.value)} placeholder="30,000km/36 month service" /></label>
-              <label>Job / repair order no. <input name="repairOrderNo" value={roNo} onChange={(e) => setRoNo(e.target.value)} placeholder="JCS4040697" /></label>
-              <label>Invoice no. <input name="invoiceNo" value={invoiceNo} onChange={(e) => setInvoiceNo(e.target.value)} placeholder="wb497666" /></label>
+              <label>Service type <input name="serviceType" value={serviceType} onChange={(e) => setServiceType(e.target.value)} placeholder="60,000km logbook service" /></label>
+              <label>Job / repair order no. <input name="repairOrderNo" value={roNo} onChange={(e) => setRoNo(e.target.value)} placeholder="RO-987654" /></label>
+              <label>Invoice no. <input name="invoiceNo" value={invoiceNo} onChange={(e) => setInvoiceNo(e.target.value)} placeholder="1234567" /></label>
             </div>
             <div className="row">
               <label>Adviser <input name="adviser" value={adviser} onChange={(e) => setAdviser(e.target.value)} placeholder="DAN" /></label>
@@ -139,8 +139,8 @@ export default function NewEntry({ vehicleId, lastOdo }: { vehicleId: string; la
             </div>
             <div className="row three">
               <label>Parts ($) <input name="parts" inputMode="decimal" placeholder="0.00" /></label>
-              <label>Labour ($) <input name="labour" inputMode="decimal" value={labour} onChange={(e) => setLabour(e.target.value)} placeholder="136.36" /></label>
-              <label>GST ($) <input name="gst" inputMode="decimal" value={gst} onChange={(e) => setGst(e.target.value)} placeholder="13.64" /></label>
+              <label>Labour ($) <input name="labour" inputMode="decimal" value={labour} onChange={(e) => setLabour(e.target.value)} placeholder="250.00" /></label>
+              <label>GST ($) <input name="gst" inputMode="decimal" value={gst} onChange={(e) => setGst(e.target.value)} placeholder="25.00" /></label>
             </div>
             <div className="row">
               <label>Next service due <input type="date" name="nextServiceDue" value={nextDue} onChange={(e) => setNextDue(e.target.value)} /></label>
