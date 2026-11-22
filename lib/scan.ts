@@ -362,7 +362,7 @@ export function readInvoice(text: string): InvoiceRead {
   // the invoice's own SELLING DEALER field, the payment footer's account name,
   // then the letterhead at the top of the page. A suggestion the human confirms.
   // A real workshop name: at least two letter runs, no long digit run (that is
-  // a rego or odometer the OCR merged into the line, e.g. "L23ES 2822117").
+  // a rego or odometer the OCR merged into the line, e.g. "ABC123 2822117").
   const nameOk = (v: string) =>
     (v.match(/[A-Z]{2,}/g) ?? []).length >= 2 && !/\d{3}/.test(v);
   m = t.match(/SELLING\s+DEALER\s*:?\s*(?:\n\s*)?([A-Z][A-Z0-9& .,'\/-]{2,45})/);
