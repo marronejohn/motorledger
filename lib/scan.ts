@@ -88,16 +88,36 @@ function extract(text: string): Omit<ScanResult, "text"> {
   return { dates, odos: odos.sort((a, b) => b - a), jobs: jobs.slice(0, 8), costs: costs.sort((a, b) => b - a) };
 }
 
+// A stuck reading engine (a CDN fetch that never lands, a worker that never
+// starts) must surface as an error the form can show, never a silent hang.
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${what} (timed out)`)), ms)),
+  ]);
+}
+
 export async function scanLogbookImage(
   dataUrl: string,
   onProgress?: (pct: number) => void
 ): Promise<ScanResult> {
   const T = await loadTesseract();
-  const res = await T.recognize(dataUrl, "eng", {
-    logger: (m: any) => {
-      if (m.progress != null && onProgress) onProgress(Math.round(m.progress * 100));
-    },
-  });
+  const res = await withTimeout(
+    T.recognize(dataUrl, "eng", {
+      // The engine's own parts are bundled under /tesseract: worker script,
+      // wasm core variants and the english data. Without these paths the
+      // library still defaults to a CDN and a stalled fetch hangs the scan
+      // with no progress and no error.
+      workerPath: "/tesseract/worker.min.js",
+      corePath: "/tesseract/core",
+      langPath: "/tesseract/lang",
+      logger: (m: any) => {
+        if (m.progress != null && onProgress) onProgress(Math.round(m.progress * 100));
+      },
+    }),
+    180000,
+    "the reading engine did not respond"
+  );
   const text: string = res?.data?.text ?? "";
   return { text, ...extract(text) };
 }
@@ -497,6 +517,11 @@ export function readLogTextLayer(text: string): { dates: string[]; jobs: string[
   return { dates, jobs, costs };
 }
 
+// A typed PDF carries its own text layer, and where that layer is rich it
+// beats OCR outright: exact dealer names, invoice numbers, job lines. So it is
+// read FIRST and, when it is rich, the OCR pass is skipped entirely and a
+// typed invoice fills the form in seconds with no reading engine involved.
+// Photos and image-only PDFs (the layer is too thin) still go through OCR.
 export async function scanLogFile(
   file: File,
   onProgress?: (pct: number) => void
@@ -514,38 +539,41 @@ export async function scanLogFile(
     serviceType: null, repairOrderNo: null, invoiceNo: null, provider: null, adviser: null,
     nextServiceDue: null, nextServiceOdometer: null, labour: null, gst: null, items: [],
   };
-  for (let i = 0; i < pages.length; i++) {
-    const res = await scanLogbookImage(pages[i], (p) =>
-      onProgress?.(Math.round(((i + p / 100) / pages.length) * 100))
-    );
-    text += (text ? "\n" : "") + res.text;
-    invoice = mergeInvoice(invoice, readInvoice(res.text));
-    for (const d of res.dates) if (!dates.includes(d)) dates.push(d);
-    for (const o of res.odos) if (!odos.includes(o)) odos.push(o);
-    for (const j of res.jobs) if (!jobs.includes(j)) jobs.push(j);
-    for (const c of res.costs) if (!costs.includes(c)) costs.push(c);
-  }
-  // A typed PDF carries its own text layer; where it has real content it beats
-  // OCR for the fields that matter: the dealer name, invoice number, job lines.
-  // OCR stays the source for anything the text layer omits (odometer labels
-  // whose values sit in separate runs, for instance).
+
+  let textLayer: string | null = null;
   if (isPdf) {
     try {
       const tl = await pdfTextContent(file);
-      if (tl.replace(/\s/g, "").length > 150) {
-        const tlInv = readInvoice(tl);
-        invoice = mergeInvoice(tlInv, invoice);
-        const tlRead = readLogTextLayer(tl);
-        const goodDates = tlInv.nextServiceDue
-          ? tlRead.dates.filter((d) => d !== tlInv.nextServiceDue)
-          : tlRead.dates;
-        const uniq = (arr: string[]) => arr.filter((v, i) => arr.indexOf(v) === i);
-        dates = uniq([...goodDates, ...dates]);
-        jobs = uniq([...tlRead.jobs, ...jobs]);
-        costs = Array.from(new Set([...tlRead.costs, ...costs]));
-      }
+      if (tl.replace(/\s/g, "").length > 150) textLayer = tl;
     } catch {
-      // no usable text layer; the OCR read stands
+      // no usable text layer; the OCR pass below handles it
+    }
+  }
+
+  if (textLayer) {
+    text = textLayer;
+    invoice = readInvoice(textLayer);
+    const tlRead = readLogTextLayer(textLayer);
+    const ex = extract(textLayer);
+    const goodDates = invoice.nextServiceDue
+      ? tlRead.dates.filter((d) => d !== invoice.nextServiceDue)
+      : tlRead.dates;
+    const uniq = (arr: string[]) => arr.filter((v, i) => arr.indexOf(v) === i);
+    dates = uniq([...goodDates, ...ex.dates]);
+    odos = ex.odos;
+    jobs = uniq([...tlRead.jobs, ...ex.jobs]);
+    costs = Array.from(new Set([...tlRead.costs, ...ex.costs]));
+  } else {
+    for (let i = 0; i < pages.length; i++) {
+      const res = await scanLogbookImage(pages[i], (p) =>
+        onProgress?.(Math.round(((i + p / 100) / pages.length) * 100))
+      );
+      text += (text ? "\n" : "") + res.text;
+      invoice = mergeInvoice(invoice, readInvoice(res.text));
+      for (const d of res.dates) if (!dates.includes(d)) dates.push(d);
+      for (const o of res.odos) if (!odos.includes(o)) odos.push(o);
+      for (const j of res.jobs) if (!jobs.includes(j)) jobs.push(j);
+      for (const c of res.costs) if (!costs.includes(c)) costs.push(c);
     }
   }
   odos.sort((a, b) => b - a);
