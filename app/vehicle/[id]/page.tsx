@@ -253,9 +253,7 @@ export default async function VehiclePage({ params }: { params: Promise<{ id: st
                     ))}
                   </div>
                 )}
-                {owner && (
-                  <p><Link href={`/entry/${e.id}/edit`} className="editlink">Edit this entry</Link></p>
-                )}
+                <p><Link href={`/entry/${e.id}/edit`} className="editlink">Edit this entry</Link></p>
               </div>
             </li>
           ))}
