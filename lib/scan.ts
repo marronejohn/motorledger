@@ -101,13 +101,30 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
   ]);
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException("Scan cancelled", "AbortError");
+  }
+}
+
+function abortError(): Error {
+  return new DOMException("Scan cancelled", "AbortError");
+}
+
 export async function scanLogbookImage(
   dataUrl: string,
-  onProgress?: (pct: number) => void
+  onProgress?: (pct: number) => void,
+  signal?: AbortSignal
 ): Promise<ScanResult> {
+  throwIfAborted(signal);
   const T = await loadTesseract();
-  const res: any = await withTimeout<any>(
-    T.recognize(dataUrl, "eng", {
+  throwIfAborted(signal);
+  const abortPromise = signal
+    ? new Promise<never>((_, reject) => {
+        signal.addEventListener("abort", () => reject(abortError()), { once: true });
+      })
+    : null;
+  const recognizePromise: Promise<any> = T.recognize(dataUrl, "eng", {
       // The engine's own parts are bundled under /tesseract: worker script,
       // wasm core variants and the english data. Without these paths the
       // library still defaults to a CDN and a stalled fetch hangs the scan
@@ -118,10 +135,13 @@ export async function scanLogbookImage(
       logger: (m: any) => {
         if (m.progress != null && onProgress) onProgress(Math.round(m.progress * 100));
       },
-    }),
+    });
+  const res: any = await withTimeout<any>(
+    abortPromise ? Promise.race([recognizePromise, abortPromise]) : recognizePromise,
     180000,
     "the reading engine did not respond"
   );
+  throwIfAborted(signal);
   const text: string = res?.data?.text ?? "";
   return { text, ...extract(text) };
 }
@@ -321,7 +341,13 @@ export async function scanVehiclePhoto(file: File): Promise<VehicleScan> {
 }
 
 import { fileToCompressedDataUrl } from "./image";
-import { pdfToPageDataUrls, pdfTextContent } from "./pdf";
+import {
+  openPdfDocument,
+  destroyPdfDocument,
+  pdfTextContentFromDoc,
+  pdfToPageDataUrlsFromDoc,
+  PDF_MAX_PAGES,
+} from "./pdf";
 
 export function isPdfFile(file: File): boolean {
   return file.type === "application/pdf" || /\.pdf$/i.test(file.name || "");
@@ -528,16 +554,19 @@ export function readLogTextLayer(text: string): { dates: string[]; jobs: string[
 // Photos and image-only PDFs (the layer is too thin) still go through OCR.
 export async function scanLogFile(
   file: File,
-  onProgress?: (msg: string) => void
+  onProgress?: (msg: string) => void,
+  signal?: AbortSignal
 ): Promise<LogScan> {
+  throwIfAborted(signal);
   const isPdf = isPdfFile(file);
-  const pages = isPdf
-    ? await withTimeout<string[]>(
-        pdfToPageDataUrls(file, (p) => onProgress?.(`rendering the PDF pages… ${p}%`)),
-        120000,
-        "the PDF would not render"
-      )
-    : [await fileToCompressedDataUrl(file)];
+
+  // Large-file guard: a big scanned PDF is the slowest case, so cap it
+  // harder up front instead of rendering / OCR-ing up to 10 pages.
+  const pageLimit = isPdf && file.size > 15 * 1024 * 1024 ? 2 : PDF_MAX_PAGES;
+  if (isPdf && file.size > 15 * 1024 * 1024) {
+    onProgress?.("Large PDF — reading the first 2 pages only…");
+  }
+
   let dates: string[] = [];
   let odos: number[] = [];
   let jobs: string[] = [];
@@ -548,43 +577,95 @@ export async function scanLogFile(
     nextServiceDue: null, nextServiceOdometer: null, labour: null, gst: null, items: [],
   };
 
-  let textLayer: string | null = null;
-  if (isPdf) {
+  const finish = (pages: string[]): LogScan => {
+    odos.sort((a, b) => b - a);
+    costs.sort((a, b) => b - a);
+    return {
+      pages, text, dates, odos: odos.slice(0, 10), jobs: jobs.slice(0, 12),
+      costs: costs.slice(0, 5), invoice,
+    };
+  };
+
+  if (!isPdf) {
+    const pages = [await fileToCompressedDataUrl(file)];
+    throwIfAborted(signal);
+    onProgress?.("loading the reading engine…");
+    const res = await scanLogbookImage(pages[0], (p) =>
+      onProgress?.(`reading page 1 of 1… ${p}%`), signal
+    );
+    throwIfAborted(signal);
+    text = res.text;
+    invoice = mergeInvoice(invoice, readInvoice(res.text));
+    dates = res.dates;
+    odos = res.odos;
+    jobs = res.jobs;
+    costs = res.costs;
+    return finish(pages);
+  }
+
+  // PDF: open the document ONCE, then read the text layer FIRST. Previously
+  // every page was rendered to images first (up to 10 pages at 1600px) and
+  // the document was parsed a second time for text, so even a typed invoice
+  // paid for a full render before any fields were read.
+  const { doc } = await openPdfDocument(file, signal);
+  try {
     onProgress?.("reading the PDF text layer…");
+    let textLayer: string | null = null;
     try {
       const tl = await withTimeout<string>(
-        pdfTextContent(file),
+        pdfTextContentFromDoc(doc, pageLimit, signal),
         60000,
         "the PDF text could not be read"
       );
       if (tl.replace(/\s/g, "").length > 150) textLayer = tl;
-    } catch {
+    } catch (e) {
+      if (signal?.aborted) throw e;
       // no usable text layer; the OCR pass below handles it
     }
-  }
 
-  if (textLayer) {
-    onProgress?.("picking out the fields…");
-    text = textLayer;
-    invoice = readInvoice(textLayer);
-    const tlRead = readLogTextLayer(textLayer);
-    const ex = extract(textLayer);
-    const goodDates = invoice.nextServiceDue
-      ? tlRead.dates.filter((d) => d !== invoice.nextServiceDue)
-      : tlRead.dates;
-    const uniq = (arr: string[]) => arr.filter((v, i) => arr.indexOf(v) === i);
-    dates = uniq([...goodDates, ...ex.dates]);
-    odos = ex.odos;
-    jobs = uniq([...tlRead.jobs, ...ex.jobs]);
-    costs = Array.from(new Set([...tlRead.costs, ...ex.costs]));
-  } else {
+    if (textLayer) {
+      onProgress?.("picking out the fields…");
+      text = textLayer;
+      invoice = readInvoice(textLayer);
+      const tlRead = readLogTextLayer(textLayer);
+      const ex = extract(textLayer);
+      const goodDates = invoice.nextServiceDue
+        ? tlRead.dates.filter((d) => d !== invoice.nextServiceDue)
+        : tlRead.dates;
+      const uniq = (arr: string[]) => arr.filter((v, i) => arr.indexOf(v) === i);
+      dates = uniq([...goodDates, ...ex.dates]);
+      odos = ex.odos;
+      jobs = uniq([...tlRead.jobs, ...ex.jobs]);
+      costs = Array.from(new Set([...tlRead.costs, ...ex.costs]));
+      // Rich text: skip full rendering and OCR entirely. Render only the
+      // first page at low res so the entry still has a receipt thumbnail.
+      let pages: string[] = [];
+      try {
+        onProgress?.("rendering a receipt thumbnail…");
+        pages = await pdfToPageDataUrlsFromDoc(doc, 1, undefined, signal);
+      } catch (e) {
+        if (signal?.aborted) throw e;
+        pages = [];
+      }
+      return finish(pages);
+    }
+
+    // Thin / image-only PDF: render at most pageLimit pages, then OCR
+    // page-by-page, checking for cancel between pages.
+    const pages = await withTimeout<string[]>(
+      pdfToPageDataUrlsFromDoc(doc, pageLimit, (p) => onProgress?.(`rendering the PDF pages… ${p}%`), signal),
+      120000,
+      "the PDF would not render"
+    );
     for (let i = 0; i < pages.length; i++) {
+      throwIfAborted(signal);
       onProgress?.(
         i === 0 ? "loading the reading engine…" : `reading page ${i + 1} of ${pages.length}…`
       );
       const res = await scanLogbookImage(pages[i], (p) =>
-        onProgress?.(`reading page ${i + 1} of ${pages.length}… ${p}%`)
+        onProgress?.(`reading page ${i + 1} of ${pages.length}… ${p}%`), signal
       );
+      throwIfAborted(signal);
       text += (text ? "\n" : "") + res.text;
       invoice = mergeInvoice(invoice, readInvoice(res.text));
       for (const d of res.dates) if (!dates.includes(d)) dates.push(d);
@@ -592,11 +673,8 @@ export async function scanLogFile(
       for (const j of res.jobs) if (!jobs.includes(j)) jobs.push(j);
       for (const c of res.costs) if (!costs.includes(c)) costs.push(c);
     }
+    return finish(pages);
+  } finally {
+    await destroyPdfDocument(doc);
   }
-  odos.sort((a, b) => b - a);
-  costs.sort((a, b) => b - a);
-  return {
-    pages, text, dates, odos: odos.slice(0, 10), jobs: jobs.slice(0, 12),
-    costs: costs.slice(0, 5), invoice,
-  };
 }
