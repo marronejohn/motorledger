@@ -11,16 +11,21 @@ declare global {
 
 async function loadPdfjs(): Promise<any> {
   if (window.pdfjsLib) return window.pdfjsLib;
+  // pdf.js 4+ ships only as an ES module, so the library is loaded with a
+  // module script that publishes it on the window for the rest of the app.
   await new Promise<void>((resolve, reject) => {
     const s = document.createElement("script");
-    s.src = "/pdfjs/pdf.min.js";
+    s.type = "module";
+    s.textContent =
+      'import * as pdfjsLib from "/pdfjs/pdf.min.mjs";' +
+      'pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdfjs/pdf.worker.min.mjs";' +
+      'window.pdfjsLib = pdfjsLib;';
     s.onload = () => resolve();
     s.onerror = () => reject(new Error("could not load the PDF reader"));
     document.head.appendChild(s);
   });
   const lib = window.pdfjsLib;
   if (!lib) throw new Error("PDF reader unavailable");
-  lib.GlobalWorkerOptions.workerSrc = "/pdfjs/pdf.worker.min.js";
   return lib;
 }
 
