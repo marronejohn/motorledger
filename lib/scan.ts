@@ -102,7 +102,7 @@ export async function scanLogbookImage(
   onProgress?: (pct: number) => void
 ): Promise<ScanResult> {
   const T = await loadTesseract();
-  const res = await withTimeout(
+  const res: any = await withTimeout<any>(
     T.recognize(dataUrl, "eng", {
       // The engine's own parts are bundled under /tesseract: worker script,
       // wasm core variants and the english data. Without these paths the
