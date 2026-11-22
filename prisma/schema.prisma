@@ -1,0 +1,125 @@
+// MotorLedger data model, v1
+// Design rules:
+// - vehicle "type" is INFERRED from the onboarding photo, never picked first;
+//   it drives labels and icons only, never logic.
+// - ServiceEntry.source is the audit trail for scanned entries; every scanned
+//   entry is human-confirmed before it saves, and carries its source document.
+// - Handover is the sale moment: the seller passes the dossier to the buyer
+//   with one link; the buyer accepts and inherits the history.
+// - Odometer continuity (backwards readings, suspicious gaps) is COMPUTED at
+//   read time, not stored, and feeds the dossier's "history verified" line.
+// - Buyer share view is login-free: Vehicle.shareToken is the public key.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Vehicle {
+  id             String   @id @default(cuid())
+  ownerId        String
+  // Inferred from the onboarding photo (car, bike, boat, caravan, other). Nullable until confirmed.
+  type           String?
+  typeConfirmed  Boolean  @default(false)
+  nickname       String?
+  year           Int?
+  make           String?
+  model          String?
+  vin            String?
+  registration   String?
+  photoUrl       String?
+  // Public, login-free buyer view key
+  shareToken     String   @unique @default(cuid())
+  // Set when the handover link is accepted; the new owner inherits the history
+  ownerIdAtSale  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  entries   ServiceEntry[]
+  documents Document[]
+  handovers Handover[]
+
+  @@index([ownerId])
+}
+
+model ServiceEntry {
+  id        String   @id @default(cuid())
+  vehicleId String
+  vehicle   Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  date      DateTime
+  // Odometer (km) or engine hours; one of them, raw as read
+  odometerKm    Int?
+  engineHours   Decimal?
+  jobs          String
+  costCents     Int?
+  currency      String   @default("AUD")
+  provider      String?
+  notes         String?
+  // Common service-invoice fields (dealership "service tax invoice" style and
+  // the fields every maintenance-log guide names): what kind of visit, the
+  // workshop's job/invoice number, the adviser who booked it in, the cost
+  // split (parts / labour / GST), how it was paid, and when the next visit is
+  // due. lineItems holds the invoice's part/labour rows.
+  serviceType       String?
+  repairOrderNo     String?
+  invoiceNo         String?
+  // Parts and fluids actually fitted, with brand/spec where the invoice shows it
+  partsUsed         String?
+  // Warranty or claim note ("under new-vehicle warranty", "parts wty to 2028")
+  warranty          String?
+  adviser           String?
+  labourCents       Int?
+  partsCents        Int?
+  gstCents          Int?
+  paymentMethod     String?
+  nextServiceDue    DateTime?
+  nextServiceOdometer Int?
+  lineItems         Json?
+  // MANUAL | SCAN | IMPORT
+  source        String   @default("MANUAL")
+  // Scanned entries are never saved without a human confirm
+  confirmed     Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  documents Document[]
+
+  @@index([vehicleId, date])
+}
+
+model Document {
+  id        String   @id @default(cuid())
+  vehicleId String?
+  vehicle   Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  entryId   String?
+  entry     ServiceEntry? @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  // PHOTO (compressed client-side) | PDF
+  kind      String
+  url       String
+  bytes     Int?
+  createdAt DateTime @default(now())
+
+  @@index([vehicleId])
+  @@index([entryId])
+}
+
+model Handover {
+  id        String   @id @default(cuid())
+  vehicleId String
+  vehicle   Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  token     String   @unique @default(cuid())
+  // NULL until the buyer accepts; then the vehicle changes owner
+  acceptedAt DateTime?
+  toName    String?
+  createdAt DateTime @default(now())
+}
+
+// Tiny key/value store for app-level owner choices (passcode on/off).
+model AppSetting {
+  id    Int    @id @default(autoincrement())
+  key   String @unique
+  value String
+}

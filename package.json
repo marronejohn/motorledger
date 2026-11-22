@@ -1,0 +1,26 @@
+{
+  "name": "motorledger",
+  "version": "0.2.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@prisma/client": "^6",
+    "next": "^16.4.6",
+    "onnxruntime-web": "^1.31.1",
+    "pdfjs-dist": "^3.11.174",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "@types/react": "19.3.0",
+    "prisma": "^6",
+    "typescript": "^5"
+  }
+}
