@@ -3,6 +3,7 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { isOwner, passcodeConfigured } from "@/lib/auth";
 import NewEntry from "@/app/new-entry";
+import { updateVehicle } from "@/app/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -85,6 +86,16 @@ export default async function VehiclePage({ params }: { params: Promise<{ id: st
     }
   }
 
+  // Reminder dates on the vehicle itself: the page reads them back with the
+  // days until (or since) each, so nobody does date maths in their head.
+  const dueTxt = (d: Date) => {
+    const days = Math.ceil((d.getTime() - Date.now()) / 86400000);
+    const when = d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+    if (days < 0) return `${when} (${Math.abs(days)} ${Math.abs(days) === 1 ? "day" : "days"} ago)`;
+    if (days === 0) return `${when} (today)`;
+    return `${when} (in ${days} ${days === 1 ? "day" : "days"})`;
+  };
+
   return (
     <main className="wrap">
       <p><Link href="/">← All vehicles</Link></p>
@@ -117,6 +128,25 @@ export default async function VehiclePage({ params }: { params: Promise<{ id: st
               <>Next service at {nextOdo.nextServiceOdometer.toLocaleString()} km. </>
             )}
           </p>
+          {(vehicle.regoExpiry || vehicle.insuranceExpiry || vehicle.insurer) && (
+            <p className="meta">
+              {vehicle.regoExpiry && <>Rego expires {dueTxt(vehicle.regoExpiry)}. </>}
+              {vehicle.insuranceExpiry && (
+                <>Insurance{vehicle.insurer ? ` (${vehicle.insurer})` : ""} expires {dueTxt(vehicle.insuranceExpiry)}. </>
+              )}
+              {vehicle.insurer && !vehicle.insuranceExpiry && <>Insured with {vehicle.insurer}. </>}
+            </p>
+          )}
+          <details>
+            <summary className="meta">Edit reminder dates</summary>
+            <form action={updateVehicle} className="form">
+              <input type="hidden" name="vehicleId" value={vehicle.id} />
+              <label>Rego expires <input type="date" name="regoExpiry" defaultValue={vehicle.regoExpiry ? vehicle.regoExpiry.toISOString().slice(0, 10) : ""} /></label>
+              <label>Insurer <input name="insurer" defaultValue={vehicle.insurer ?? ""} placeholder="e.g. AAMI" /></label>
+              <label>Insurance expires <input type="date" name="insuranceExpiry" defaultValue={vehicle.insuranceExpiry ? vehicle.insuranceExpiry.toISOString().slice(0, 10) : ""} /></label>
+              <button className="btn" type="submit">Save reminder dates</button>
+            </form>
+          </details>
           {vehicle.entries.length > 0 && (
             <p className="meta">
               {lastEntry && (

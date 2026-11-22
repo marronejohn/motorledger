@@ -24,6 +24,9 @@ export async function createVehicle(fd: FormData) {
   const model = (fd.get("model") as string) || null;
   const vin = (fd.get("vin") as string) || null;
   const registration = (fd.get("registration") as string) || null;
+  const regoExpiryRaw = fd.get("regoExpiry") as string;
+  const insurer = (fd.get("insurer") as string) || null;
+  const insuranceExpiryRaw = fd.get("insuranceExpiry") as string;
   const photoUrl = (fd.get("photoUrl") as string) || null;
 
   const vehicle = await db.vehicle.create({
@@ -37,6 +40,9 @@ export async function createVehicle(fd: FormData) {
       model,
       vin,
       registration,
+      regoExpiry: regoExpiryRaw ? new Date(`${regoExpiryRaw}T00:00:00`) : null,
+      insurer,
+      insuranceExpiry: insuranceExpiryRaw ? new Date(`${insuranceExpiryRaw}T00:00:00`) : null,
       photoUrl,
     },
   });
@@ -51,6 +57,27 @@ export async function createVehicle(fd: FormData) {
 
   revalidatePath("/");
   redirect(`/vehicle/${vehicle.id}`);
+}
+
+// Editing a vehicle's reminder dates: rego expiry, insurer, insurance
+// expiry. Owner-gated like every write path.
+export async function updateVehicle(fd: FormData) {
+  if (!(await isOwner())) redirect("/unlock");
+  const id = fd.get("vehicleId") as string;
+  const dateFrom = (name: string) => {
+    const raw = fd.get(name) as string;
+    return raw ? new Date(`${raw}T00:00:00`) : null;
+  };
+  await db.vehicle.update({
+    where: { id },
+    data: {
+      regoExpiry: dateFrom("regoExpiry"),
+      insurer: (fd.get("insurer") as string) || null,
+      insuranceExpiry: dateFrom("insuranceExpiry"),
+    },
+  });
+  revalidatePath(`/vehicle/${id}`);
+  redirect(`/vehicle/${id}`);
 }
 
 // Deleting a vehicle removes the profile and, by cascade, its entries,

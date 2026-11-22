@@ -31,6 +31,11 @@ model Vehicle {
   model          String?
   vin            String?
   registration   String?
+  // Reminder dates the owner tracks between visits: when the rego and the
+  // insurance run out, and who holds the policy.
+  regoExpiry      DateTime?
+  insurer         String?
+  insuranceExpiry DateTime?
   photoUrl       String?
   // Public, login-free buyer view key
   shareToken     String   @unique @default(cuid())

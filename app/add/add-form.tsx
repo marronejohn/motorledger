@@ -112,6 +112,12 @@ export default function AddForm() {
         <label>Nickname <input name="nickname" placeholder="The Mach 1" /></label>
         <label>VIN (optional) <input name="vin" /></label>
 
+        <div className="row">
+          <label>Rego expires <input type="date" name="regoExpiry" /></label>
+          <label>Insurance expires <input type="date" name="insuranceExpiry" /></label>
+        </div>
+        <label>Insurer (optional) <input name="insurer" placeholder="e.g. AAMI" /></label>
+
         <label className="shot small">
           <span>📷 {pages.length ? `Add logbook page (${pages.length}/8)` : "Photograph the old logbook (optional)"}</span>
           <input type="file" accept="image/*" capture="environment" hidden onChange={(e) => takePhoto(e, "logbook")} />
