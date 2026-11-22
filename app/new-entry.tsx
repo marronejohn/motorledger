@@ -37,6 +37,16 @@ export default function NewEntry({ vehicleId, lastOdo }: { vehicleId: string; la
   const touched = useRef({ date: false, odo: false, jobs: false }).current;
   const [scanning, setScanning] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Cancel for a stuck scan: the controller lives in a ref so the Cancel
+  // button can abort the in-flight scanLogFile call from another render.
+  const scanAbort = useRef<AbortController | null>(null);
+
+  function cancelScan() {
+    scanAbort.current?.abort();
+    // The scan's catch below also clears up; this makes the UI respond at once.
+    setScanMsg("Scan cancelled.");
+    setScanning(false);
+  }
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const input = e.currentTarget;
@@ -44,6 +54,8 @@ export default function NewEntry({ vehicleId, lastOdo }: { vehicleId: string; la
     input.value = ""; // so picking the same file again still fires
     if (!file) return;
     const kind = isPdfFile(file) ? "PDF" : "photo";
+    const controller = new AbortController();
+    scanAbort.current = controller;
     setScanning(true);
     setScanMsg(kind === "PDF" ? "Opening the PDF…" : "Reading the page…");
     setErr(null);
@@ -51,7 +63,7 @@ export default function NewEntry({ vehicleId, lastOdo }: { vehicleId: string; la
       // The scan pipeline reports each phase in its own words now: rendering,
       // text layer, fields, engine load, OCR page by page. Show it verbatim so
       // a stall names the exact step it stopped on.
-      const res = await scanLogFile(file, setScanMsg);
+      const res = await scanLogFile(file, setScanMsg, controller.signal);
       if (res.pages.length) setReceipts((r) => [...r, ...res.pages].slice(0, 4));
       const picked = res.dates[0];
       if (picked && !touched.date) setDate(picked);
@@ -82,10 +94,19 @@ export default function NewEntry({ vehicleId, lastOdo }: { vehicleId: string; la
           : `Could not read a date or amount from that ${kind}. Type it in and attach it anyway.`
       );
     } catch (e) {
-      const why = e instanceof Error ? e.message : "";
-      setScanMsg(null);
-      setErr(why ? `Could not read that ${kind}: ${why}` : `Could not read that ${kind}.`);
+      const isAbort =
+        (e instanceof DOMException && e.name === "AbortError") ||
+        (e instanceof Error && /cancelled/i.test(e.message));
+      if (isAbort) {
+        setScanMsg("Scan cancelled.");
+        setErr(null);
+      } else {
+        const why = e instanceof Error ? e.message : "";
+        setScanMsg(null);
+        setErr(why ? `Could not read that ${kind}: ${why}` : `Could not read that ${kind}.`);
+      }
     }
+    scanAbort.current = null;
     setScanning(false);
   }
 
@@ -160,6 +181,11 @@ export default function NewEntry({ vehicleId, lastOdo }: { vehicleId: string; la
             <input type="file" accept="image/*,.pdf,application/pdf" hidden onChange={onFile} disabled={scanning} />
           </label>
         </div>
+        {scanning && (
+          <button className="btn btn-ghost" type="button" onClick={cancelScan}>
+            Cancel scan
+          </button>
+        )}
         {source === "SCAN" && scanMsg && <p className="meta">{scanMsg}</p>}
         {receipts.length > 0 && (
           <div className="strip">
