@@ -22,13 +22,17 @@ declare global {
 
 async function loadTesseract(): Promise<any> {
   if (window.Tesseract) return window.Tesseract;
-  await new Promise<void>((resolve, reject) => {
-    const s = document.createElement("script");
-    s.src = "/tesseract/tesseract.min.js";
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error("could not load the reading engine"));
-    document.head.appendChild(s);
-  });
+  await withTimeout<void>(
+    new Promise<void>((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "/tesseract/tesseract.min.js";
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error("could not load the reading engine"));
+      document.head.appendChild(s);
+    }),
+    45000,
+    "the reading engine could not load"
+  );
   if (!window.Tesseract) throw new Error("reading engine unavailable");
   return window.Tesseract;
 }
@@ -524,11 +528,15 @@ export function readLogTextLayer(text: string): { dates: string[]; jobs: string[
 // Photos and image-only PDFs (the layer is too thin) still go through OCR.
 export async function scanLogFile(
   file: File,
-  onProgress?: (pct: number) => void
+  onProgress?: (msg: string) => void
 ): Promise<LogScan> {
   const isPdf = isPdfFile(file);
   const pages = isPdf
-    ? await pdfToPageDataUrls(file, onProgress)
+    ? await withTimeout<string[]>(
+        pdfToPageDataUrls(file, (p) => onProgress?.(`rendering the PDF pages… ${p}%`)),
+        120000,
+        "the PDF would not render"
+      )
     : [await fileToCompressedDataUrl(file)];
   let dates: string[] = [];
   let odos: number[] = [];
@@ -542,8 +550,13 @@ export async function scanLogFile(
 
   let textLayer: string | null = null;
   if (isPdf) {
+    onProgress?.("reading the PDF text layer…");
     try {
-      const tl = await pdfTextContent(file);
+      const tl = await withTimeout<string>(
+        pdfTextContent(file),
+        60000,
+        "the PDF text could not be read"
+      );
       if (tl.replace(/\s/g, "").length > 150) textLayer = tl;
     } catch {
       // no usable text layer; the OCR pass below handles it
@@ -551,6 +564,7 @@ export async function scanLogFile(
   }
 
   if (textLayer) {
+    onProgress?.("picking out the fields…");
     text = textLayer;
     invoice = readInvoice(textLayer);
     const tlRead = readLogTextLayer(textLayer);
@@ -565,8 +579,11 @@ export async function scanLogFile(
     costs = Array.from(new Set([...tlRead.costs, ...ex.costs]));
   } else {
     for (let i = 0; i < pages.length; i++) {
+      onProgress?.(
+        i === 0 ? "loading the reading engine…" : `reading page ${i + 1} of ${pages.length}…`
+      );
       const res = await scanLogbookImage(pages[i], (p) =>
-        onProgress?.(Math.round(((i + p / 100) / pages.length) * 100))
+        onProgress?.(`reading page ${i + 1} of ${pages.length}… ${p}%`)
       );
       text += (text ? "\n" : "") + res.text;
       invoice = mergeInvoice(invoice, readInvoice(res.text));

@@ -48,9 +48,10 @@ export default function NewEntry({ vehicleId, lastOdo }: { vehicleId: string; la
     setScanMsg(kind === "PDF" ? "Opening the PDF…" : "Reading the page…");
     setErr(null);
     try {
-      const res = await scanLogFile(file, (pct) =>
-        setScanMsg(kind === "PDF" ? `Reading the PDF… ${pct}%` : `Reading the page… ${pct}%`)
-      );
+      // The scan pipeline reports each phase in its own words now: rendering,
+      // text layer, fields, engine load, OCR page by page. Show it verbatim so
+      // a stall names the exact step it stopped on.
+      const res = await scanLogFile(file, setScanMsg);
       if (res.pages.length) setReceipts((r) => [...r, ...res.pages].slice(0, 4));
       const picked = res.dates[0];
       if (picked && !touched.date) setDate(picked);
