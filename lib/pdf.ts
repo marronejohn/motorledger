@@ -16,25 +16,57 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
   });
 }
 
-async function loadPdfjs(): Promise<any> {
-  if (window.pdfjsLib) return window.pdfjsLib;
-  // pdf.js 4+ ships only as an ES module, so the library is loaded with a
-  // module script that publishes it on the window for the rest of the app.
+async function injectModule(srcPath: string, workerPath: string, ms: number): Promise<void> {
   await withTimeout<void>(
     new Promise<void>((resolve, reject) => {
       const s = document.createElement("script");
       s.type = "module";
       s.textContent =
-        'import * as pdfjsLib from "/pdfjs/pdf.min.mjs";' +
-        'pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdfjs/pdf.worker.min.mjs";' +
+        'import * as pdfjsLib from "' + srcPath + '";' +
+        'pdfjsLib.GlobalWorkerOptions.workerSrc = "' + workerPath + '";' +
         'window.pdfjsLib = pdfjsLib;';
       s.onload = () => resolve();
-      s.onerror = () => reject(new Error("could not load the PDF reader"));
+      s.onerror = () => reject(new Error("module reader failed"));
       document.head.appendChild(s);
     }),
-    45000,
-    "the PDF reader could not load"
+    ms,
+    "module reader timed out"
   );
+}
+
+async function injectClassic(srcPath: string, workerPath: string, ms: number): Promise<void> {
+  await withTimeout<void>(
+    new Promise<void>((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = srcPath;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error("classic reader failed"));
+      document.head.appendChild(s);
+    }),
+    ms,
+    "classic reader timed out"
+  ).then(() => {
+    const lib = window.pdfjsLib;
+    if (lib && lib.GlobalWorkerOptions) lib.GlobalWorkerOptions.workerSrc = workerPath;
+  });
+}
+
+async function loadPdfjs(): Promise<any> {
+  if (window.pdfjsLib) return window.pdfjsLib;
+  // Older phone WebViews can reject the modern pdf.js build (unsupported JS
+  // syntax or no ES-module support at all), so load in steps: the legacy
+  // pdf.js module build first, then the old pdf.js 3.x classic build, which
+  // runs on nearly anything.
+  const moduleOk = "noModule" in document.createElement("script");
+  if (moduleOk) {
+    try {
+      await injectModule("/pdfjs/legacy/pdf.min.mjs", "/pdfjs/legacy/pdf.worker.min.mjs", 30000);
+      if (window.pdfjsLib) return window.pdfjsLib;
+    } catch {
+      window.pdfjsLib = undefined;
+    }
+  }
+  await injectClassic("/pdfjs/legacy-umd/pdf.min.js", "/pdfjs/legacy-umd/pdf.worker.min.js", 30000);
   const lib = window.pdfjsLib;
   if (!lib) throw new Error("PDF reader unavailable");
   return lib;
